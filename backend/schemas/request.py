@@ -1,11 +1,12 @@
 import re
 from typing import Literal
 from pydantic import BaseModel, Field, field_validator
+from config import settings
 
 FocusArea = Literal["bugs", "security", "performance", "style"]
 
 class CodeReviewRequest(BaseModel):
-    code: str = Field(..., strip_whitespace=True, max_length=50_000)
+    code: str = Field(..., strip_whitespace=True, max_length=settings.MAX_CODE_LENGTH)
     language: str = "auto"
     filename: str | None = None
     focus_areas: list[FocusArea] | None = None

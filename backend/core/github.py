@@ -51,7 +51,7 @@ async def fetch_pr_data(pr_url: str, token: str = settings.GITHUB_TOKEN) -> dict
                 raise ValueError("GitHub rate limit exceeded") from exc
             if exc.status == 404:
                 raise ValueError("PR not found or repository is private") from exc
-            raise
+            raise ValueError(f"GitHub error: {exc.status}") from exc
         finally:
             g.close()
 

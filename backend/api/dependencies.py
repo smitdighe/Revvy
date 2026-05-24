@@ -4,6 +4,7 @@ from fastapi import Header, HTTPException, Request
 from config import settings
 
 _rate_limit_store: dict[str, list[float]] = {}
+_MAX_IPS = 10000
 
 def rate_limit(request: Request) -> None:
     ip = request.client.host
@@ -23,6 +24,10 @@ def rate_limit(request: Request) -> None:
 
     timestamps.append(now)
     _rate_limit_store[ip] = timestamps
+
+    if len(_rate_limit_store) > _MAX_IPS:
+        oldest_ip = next(iter(_rate_limit_store))
+        del _rate_limit_store[oldest_ip]
 
 def get_review_id() -> str:
     return str(uuid4())

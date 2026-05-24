@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     MAX_CODE_LENGTH: int = 50000
     RATE_LIMIT_PER_MINUTE: int = 10
     API_KEY: str = ""
+    ALLOWED_ORIGINS: list[str] = ["http://localhost:5173"]
 
     model_config = {"env_file": ".env"}
 

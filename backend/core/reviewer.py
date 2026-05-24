@@ -59,7 +59,7 @@ def _strip_markdown_fences(text: str) -> str:
 async def review_code(request: CodeReviewRequest, review_id: str) -> ReviewResult:
     prompt = _build_prompt(request)
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         response = await loop.run_in_executor(
             None, lambda: client.models.generate_content(model=MODEL, contents=prompt)
@@ -98,7 +98,7 @@ async def stream_review(
 
     try:
         prompt = _build_prompt(request)
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         response = await loop.run_in_executor(
             None, lambda: client.models.generate_content_stream(model=MODEL, contents=prompt)
         )
@@ -154,7 +154,6 @@ async def stream_review(
                     elif ch == "]":
                         in_issues_array = False
 
-        # Parse full response for summary fields
         full_text = _strip_markdown_fences(json_buffer)
         try:
             data = json.loads(full_text)
