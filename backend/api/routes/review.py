@@ -9,6 +9,7 @@ from schemas.request import CodeReviewRequest, PRReviewRequest
 from schemas.response import ReviewResult
 from utils.markdown import review_to_markdown
 from utils.timer import add_timing_header, timed_review
+from schemas.response import PRFilesResult
 
 REVIEW_STORE: OrderedDict[str, ReviewResult] = OrderedDict()
 MAX_STORE_SIZE = 100
@@ -68,6 +69,30 @@ async def review_pr(
     _store_result(review_id, result)
     add_timing_header(response, elapsed_ms)
     return result
+
+@router.post("/pr/files")
+async def get_pr_files(
+    request: PRReviewRequest,
+    _rl: None = Depends(rate_limit),
+    _auth: None = Depends(verify_api_key),
+) -> dict:
+    try:
+        pr_data = await github.fetch_pr_data(request.pr_url, settings.GITHUB_TOKEN)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    files = pr_data.get("files", [])
+    return {
+        "files": [
+            {
+                "path": f["filename"],
+                "additions": f["additions"],
+                "deletions": f["deletions"],
+                "status": f["status"],
+            }
+            for f in files
+        ]
+    }
 
 @router.get("/{review_id}/export")
 async def export_review(review_id: str) -> PlainTextResponse:

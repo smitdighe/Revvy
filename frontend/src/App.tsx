@@ -269,8 +269,6 @@ const navItems: Array<{ page: Page; label: string; icon: LucideIcon }> = [
 const cx = (...classes: Array<string | false | undefined>) =>
   classes.filter(Boolean).join(" ");
 
-const pause = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
-
 function countIssues(issues: ReviewIssue[]) {
   return issues.reduce<Record<Severity, number>>(
     (acc, issue) => {
@@ -665,7 +663,10 @@ export function App() {
     if (openTabs.length === 1) return;
     const nextTabs = openTabs.filter((tab) => tab !== id);
     setOpenTabs(nextTabs);
-    if (activeFileId === id) setActiveFileId(nextTabs[0]);
+    if (activeFileId === id) {
+      const nextValid = nextTabs.find((tabId) => files.some((f) => f.id === tabId));
+      if (nextValid) setActiveFileId(nextValid);
+    }
   };
 
   const addScratchFile = () => {
@@ -691,6 +692,11 @@ export function App() {
   const runCodeReview = async () => {
     if (!activeFile.content.trim()) {
       setStatusNotice("Add code to the editor before running a review.");
+      return;
+    }
+
+    if (!languageMatchesSelection(activeFile)) {
+      setStatusNotice(`Language mismatch — select "${inferLanguageFromFile(activeFile)}" before reviewing.`);
       return;
     }
 
@@ -732,7 +738,7 @@ export function App() {
         score: filtered.score,
         date: new Date().toISOString(),
         issues: countIssues(filtered.issues),
-        codeSnapshot: filtered
+        codeSnapshot: review
       },
       ...current
     ]);
@@ -823,7 +829,7 @@ export function App() {
         date: new Date().toISOString(),
         issues: countIssues(filteredPr.issues),
         verdict: filteredPr.verdict,
-        prSnapshot: filteredPr
+        prSnapshot: result
       },
       ...current
     ]);
