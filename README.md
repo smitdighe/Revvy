@@ -47,11 +47,6 @@ Revvy is an AI-powered code review platform that analyzes raw code snippets and 
   <img src="https://img.shields.io/badge/REST_API-FF6C37?style=for-the-badge&logo=postman&logoColor=white" />
 </p>
 
-### 🗄️ Databases / Data Handling
-<p>
-  <img src="https://skillicons.dev/icons?i=sqlite" />
-</p>
-
 ### 📡 Real-Time / Networking
 <p>
   <img src="https://img.shields.io/badge/SSE-Server--Sent_Events-blue?style=for-the-badge" />
@@ -61,7 +56,6 @@ Revvy is an AI-powered code review platform that analyzes raw code snippets and 
 
 ### 🎨 UI / Animation
 <p>
-  <img src="https://img.shields.io/badge/Framer_Motion-black?style=for-the-badge&logo=framer&logoColor=blue" />
   <img src="https://img.shields.io/badge/Lucide_React-F56565?style=for-the-badge" />
 </p>
 ---
