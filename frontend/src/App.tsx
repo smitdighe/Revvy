@@ -43,13 +43,18 @@ import {
   apiAvailable,
   applyPrReviewFilters,
   applyReviewFilters,
-  demoPrFiles,
-  fetchPrFiles,
+  fetchGithubStatus,
+  fetchPrDetails,
+  getGithubToken,
+  mergeReviewResults,
+  setGithubToken,
   isOfflineError,
+  isRecoverableReviewError,
   isValidPrUrl,
   reviewCodeFile,
   reviewPullRequest
 } from "./api";
+import type { GithubStatus, PrFile, PrMeta } from "./api";
 
 type Page = "home" | "code" | "pr" | "history" | "settings";
 type Severity = "critical" | "high" | "medium" | "low";
@@ -85,13 +90,6 @@ type ReviewResult = {
   model: ModelChoice;
 };
 
-type PrFile = {
-  path: string;
-  additions: number;
-  deletions: number;
-  status: "modified" | "added" | "renamed";
-};
-
 type PrResult = ReviewResult & {
   verdict: "Approve" | "Request Changes";
   confidence: number;
@@ -109,6 +107,8 @@ type HistoryRecord = {
   verdict?: "Approve" | "Request Changes";
   codeSnapshot?: ReviewResult;
   prSnapshot?: PrResult;
+  prFiles?: PrFile[];
+  prMeta?: PrMeta;
 };
 
 type AppSettings = {
@@ -376,6 +376,52 @@ function detectIssues(file: CodeFile) {
     });
   }
 
+  if (/innerHTML\s*=/.test(content)) {
+    issues.push({
+      id: "inner-html",
+      type: "security",
+      severity: "high",
+      line: lineFor(content, "innerHTML", 1),
+      description: "innerHTML assignment can introduce DOM XSS.",
+      suggestion: "Use textContent or sanitize HTML before rendering."
+    });
+  }
+
+  if (/catch\s*\([^)]*\)\s*\{\s*\}/.test(content)) {
+    issues.push({
+      id: "empty-catch",
+      type: "bugs",
+      severity: "high",
+      line: lineFor(content, "catch", 1),
+      description: "Empty catch blocks swallow errors silently.",
+      suggestion: "Log, rethrow, or return a typed error."
+    });
+  }
+
+  content.split("\n").forEach((line, index) => {
+    if (/[^=!<>]==[^=]/.test(line) && !line.includes("===")) {
+      issues.push({
+        id: `loose-eq-${index}`,
+        type: "bugs",
+        severity: "medium",
+        line: index + 1,
+        description: "Loose equality (==) can cause subtle type-coercion bugs.",
+        suggestion: "Use === and !== instead."
+      });
+    }
+  });
+
+  if (issues.length === 0 && content.trim()) {
+    issues.push({
+      id: "manual-review",
+      type: "bugs",
+      severity: "low",
+      line: 1,
+      description: "No pattern matches — manually verify inputs, errors, and edge cases.",
+      suggestion: "Add validation, error handling, and tests for critical paths."
+    });
+  }
+
   return issues;
 }
 
@@ -416,11 +462,18 @@ function buildRawPrResult(
   settings: AppSettings,
   overrides?: { score?: number; verdict?: "Approve" | "Request Changes" }
 ): PrResult {
+  const patchContent = files
+    .map((file) => file.patch)
+    .filter((patch): patch is string => Boolean(patch))
+    .join("\n\n");
+
   const syntheticFile: CodeFile = {
     id: "pull-request.diff",
     name: url.replace(/^https?:\/\//, "") || "pull-request.diff",
     language: "Diff",
-    content: `fetch("/api/reviews")
+    content:
+      patchContent ||
+      `fetch("/api/reviews")
 localStorage.setItem("preview_token", token)
 setInterval(sync, 2000)
 console.log("merged", branch)
@@ -521,11 +574,25 @@ export function App() {
   );
   const [loadingReview, setLoadingReview] = useState(false);
   const [expandedIssues, setExpandedIssues] = useState<Record<string, boolean>>({});
-  const [prUrl, setPrUrl] = useState("https://github.com/acme/core/pull/248");
+  const [prUrl, setPrUrl] = useState("");
+  const [prMeta, setPrMeta] = useState<PrMeta | null>(null);
   const [prFiles, setPrFiles] = useState<PrFile[]>([]);
+  const [selectedPrFile, setSelectedPrFile] = useState<string | null>(null);
   const [prResult, setPrResult] = useState<PrResult | null>(null);
   const [loadingPr, setLoadingPr] = useState<"idle" | "diff" | "review">("idle");
-  const [history, setHistory] = useState<HistoryRecord[]>(starterHistory);
+  const [githubStatus, setGithubStatus] = useState<GithubStatus | null>(null);
+  const [history, setHistory] = useState<HistoryRecord[]>(() => {
+    try {
+      const saved = localStorage.getItem("revvy-history");
+      if (saved) {
+        const parsed = JSON.parse(saved) as HistoryRecord[];
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {
+      // ignore corrupt storage
+    }
+    return starterHistory;
+  });
   const [historySort, setHistorySort] = useState<"date" | "score" | "severity" | "language">("date");
   const [settings, setSettings] = useState<AppSettings>({
     model: "Claude Sonnet 4",
@@ -554,9 +621,9 @@ export function App() {
   }, [reviewAnchor, activeFileId, activeFile.content, activeFile.language]);
 
   const displayedCodeReview = useMemo(() => {
-    if (!codeReview || reviewStaleReason) return null;
+    if (!codeReview) return null;
     return applyReviewFilters(codeReview, settings);
-  }, [codeReview, reviewStaleReason, settings]);
+  }, [codeReview, settings]);
 
   const displayedPrResult = useMemo(() => {
     if (!prResult) return null;
@@ -610,6 +677,17 @@ export function App() {
   useEffect(() => {
     refreshApiStatus();
   }, []);
+
+  useEffect(() => {
+    if (page !== "pr") return;
+    fetchGithubStatus()
+      .then(setGithubStatus)
+      .catch(() => setGithubStatus(null));
+  }, [page]);
+
+  useEffect(() => {
+    localStorage.setItem("revvy-history", JSON.stringify(history));
+  }, [history]);
 
   const updateFileContent = (content: string) => {
     setFiles((current) =>
@@ -695,36 +773,44 @@ export function App() {
       return;
     }
 
-    if (!languageMatchesSelection(activeFile)) {
-      setStatusNotice(`Language mismatch — select "${inferLanguageFromFile(activeFile)}" before reviewing.`);
-      return;
-    }
+    const languageWarning = !languageMatchesSelection(activeFile)
+      ? `Language mismatch — select "${inferLanguageFromFile(activeFile)}" for best results.`
+      : null;
 
     setLoadingReview(true);
     setExpandedIssues({});
-    setStatusNotice(null);
 
-    let review: ReviewResult;
+    const localReview = buildRawReview(activeFile, settings);
+    let review: ReviewResult = localReview;
+    let notice = languageWarning;
     try {
-      if (!(await apiAvailable())) {
-        throw new TypeError("offline");
+      if (await apiAvailable()) {
+        const remote = await reviewCodeFile(
+          activeFile.content,
+          activeFile.language,
+          activeFile.name,
+          settings
+        );
+        review = mergeReviewResults(localReview, remote);
+      } else {
+        notice = notice ?? "Using local analysis — Revvy API is unreachable.";
       }
-      review = await reviewCodeFile(
-        activeFile.content,
-        activeFile.language,
-        activeFile.name,
-        settings
-      );
     } catch (error) {
-      if (isOfflineError(error)) {
-        review = buildRawReview(activeFile, settings);
-        setStatusNotice("Using local analysis — start the Revvy API for Gemini-powered reviews.");
+      if (isRecoverableReviewError(error)) {
+        review = localReview;
+        notice =
+          notice ??
+          (isOfflineError(error)
+            ? "Using local analysis — start the Revvy API for live reviews."
+            : "Using local analysis — add GEMINI_API_KEY to backend/.env for AI reviews.");
       } else {
         setStatusNotice(error instanceof Error ? error.message : "Review failed");
         setLoadingReview(false);
         return;
       }
     }
+
+    setStatusNotice(notice);
 
     const filtered = applyReviewFilters(review, settings);
     setCodeReview(review);
@@ -745,6 +831,15 @@ export function App() {
     setLoadingReview(false);
   };
 
+  const loadPrFromGitHub = async (url: string) => {
+    const details = await fetchPrDetails(url);
+    setPrMeta(details.pr);
+    setPrFiles(details.files);
+    setGithubStatus(details.github);
+    setSelectedPrFile(details.files.find((f) => f.patch)?.path ?? details.files[0]?.path ?? null);
+    return details;
+  };
+
   const fetchPrDiff = async () => {
     if (!isValidPrUrl(prUrl)) {
       setStatusNotice("Enter a valid GitHub PR URL (github.com/owner/repo/pull/123).");
@@ -753,20 +848,19 @@ export function App() {
 
     setLoadingPr("diff");
     setPrResult(null);
+    setPrMeta(null);
     setStatusNotice(null);
 
     try {
       if (!(await apiAvailable())) {
         throw new TypeError("offline");
       }
-      setPrFiles(await fetchPrFiles(prUrl));
+      await loadPrFromGitHub(prUrl);
+      setStatusNotice(null);
     } catch (error) {
-      if (isOfflineError(error)) {
-        setPrFiles(demoPrFiles);
-        setStatusNotice("Loaded demo PR files — connect the API or add GITHUB_TOKEN for live diffs.");
-      } else {
-        setStatusNotice(error instanceof Error ? error.message : "Failed to fetch PR diff");
-      }
+      setPrFiles([]);
+      setPrMeta(null);
+      setStatusNotice(error instanceof Error ? error.message : "Failed to fetch PR from GitHub");
     } finally {
       setLoadingPr("idle");
     }
@@ -779,37 +873,67 @@ export function App() {
     }
 
     let filesToReview = prFiles;
-    if (!filesToReview.length) {
+    let meta = prMeta;
+
+    if (!filesToReview.length || !meta) {
       try {
         if (!(await apiAvailable())) {
           throw new TypeError("offline");
         }
-        filesToReview = await fetchPrFiles(prUrl);
-        setPrFiles(filesToReview);
+        const details = await loadPrFromGitHub(prUrl);
+        filesToReview = details.files;
+        meta = details.pr;
       } catch (error) {
-        if (isOfflineError(error)) {
-          filesToReview = demoPrFiles;
-          setPrFiles(filesToReview);
-        } else {
-          setStatusNotice(error instanceof Error ? error.message : "Failed to load PR files");
-          return;
-        }
+        setStatusNotice(error instanceof Error ? error.message : "Failed to load PR from GitHub");
+        return;
       }
+    }
+
+    const reviewable = filesToReview.filter((f) => f.patch);
+    if (!reviewable.length) {
+      setStatusNotice("No text diffs to review — this PR may only contain binary file changes.");
+      return;
     }
 
     setLoadingPr("review");
     setStatusNotice(null);
 
-    let result: PrResult;
+    const localResult = buildRawPrResult(prUrl, reviewable, settings);
+    let result: PrResult = localResult;
+    let notice: string | null = null;
+
     try {
-      if (!(await apiAvailable())) {
-        throw new TypeError("offline");
+      if (await apiAvailable()) {
+        const remote = await reviewPullRequest(prUrl, settings, reviewable);
+        const merged = mergeReviewResults(localResult, remote);
+        const blocking = merged.issues.some(
+          (issue) => issue.severity === "critical" || issue.severity === "high"
+        );
+        const verdict: PrResult["verdict"] =
+          merged.score >= 82 && !blocking ? "Approve" : "Request Changes";
+        result = applyPrReviewFilters(
+          {
+            ...merged,
+            verdict,
+            confidence: verdict === "Approve" ? 91 : 88,
+            concerns:
+              merged.issues.length > 0
+                ? merged.issues.slice(0, 3).map((issue) => issue.description)
+                : ["No blocking concerns found in the reviewed diff."]
+          },
+          settings
+        );
+      } else {
+        notice = "Using local PR analysis — Revvy API is unreachable.";
+        result = applyPrReviewFilters(localResult, settings);
       }
-      result = await reviewPullRequest(prUrl, settings, filesToReview);
     } catch (error) {
-      if (isOfflineError(error)) {
-        result = buildRawPrResult(prUrl, filesToReview, settings);
-        setStatusNotice("Using local PR analysis — connect the Revvy API for full reviews.");
+      if (isRecoverableReviewError(error)) {
+        result = applyPrReviewFilters(localResult, settings);
+        notice =
+          isOfflineError(error)
+            ? "Using local PR analysis — connect the Revvy API for live reviews."
+            : "Using local PR analysis — add GEMINI_API_KEY for AI-powered PR reviews.";
       } else {
         setStatusNotice(error instanceof Error ? error.message : "PR review failed");
         setLoadingPr("idle");
@@ -817,7 +941,11 @@ export function App() {
       }
     }
 
-    const filteredPr = applyPrReviewFilters(result, settings);
+    if (meta?.title && !result.summary.includes(meta.title)) {
+      result = { ...result, summary: `[${meta.title}] ${result.summary}` };
+    }
+
+    setStatusNotice(notice);
     setPrResult(result);
     setHistory((current) => [
       {
@@ -825,11 +953,13 @@ export function App() {
         kind: "PR",
         fileName: prUrl.replace(/^https?:\/\//, "") || "pull-request.diff",
         language: "Diff",
-        score: filteredPr.score,
+        score: result.score,
         date: new Date().toISOString(),
-        issues: countIssues(filteredPr.issues),
-        verdict: filteredPr.verdict,
-        prSnapshot: result
+        issues: countIssues(result.issues),
+        verdict: result.verdict,
+        prSnapshot: result,
+        prFiles: filesToReview,
+        prMeta: meta ?? undefined
       },
       ...current
     ]);
@@ -874,21 +1004,24 @@ export function App() {
         setOpenTabs((current) => [...current, match.id]);
       }
       setActiveFileId(match.id);
-
-      setCodeReview({ ...buildRawReview(match, settings), score: record.score });
+      setCodeReview(record.codeSnapshot ?? buildRawReview(match, settings));
       setReviewAnchor({ fileId: match.id, content: match.content, language: match.language });
       setPage("code");
       return;
     }
 
     const url = record.fileName.startsWith("github.com") ? `https://${record.fileName}` : record.fileName;
+    const restoredFiles = record.prFiles ?? [];
     setPrUrl(url);
-    setPrFiles(demoPrFiles);
+    setPrMeta(record.prMeta ?? null);
+    setPrFiles(restoredFiles);
+    setSelectedPrFile(restoredFiles.find((f) => f.patch)?.path ?? restoredFiles[0]?.path ?? null);
     setPrResult(
-      buildRawPrResult(url, demoPrFiles, settings, {
-        score: record.score,
-        verdict: record.verdict
-      })
+      record.prSnapshot ??
+        buildRawPrResult(url, restoredFiles.length ? restoredFiles : [], settings, {
+          score: record.score,
+          verdict: record.verdict
+        })
     );
     setPage("pr");
   };
@@ -1063,10 +1196,14 @@ export function App() {
           {page === "pr" && (
             <PrReviewView
               prUrl={prUrl}
+              prMeta={prMeta}
               prFiles={prFiles}
+              selectedFile={selectedPrFile}
               prResult={displayedPrResult}
               loadingPr={loadingPr}
+              githubStatus={githubStatus}
               onPrUrlChange={setPrUrl}
+              onSelectFile={setSelectedPrFile}
               onFetchDiff={fetchPrDiff}
               onReviewPr={reviewPr}
             />
@@ -1086,8 +1223,15 @@ export function App() {
               settings={settings}
               stats={stats}
               apiOnline={apiOnline}
+              githubStatus={githubStatus}
               onSettingsChange={setSettings}
               onToggleReviewType={toggleReviewType}
+              onGithubTokenChange={(token) => {
+                setGithubToken(token);
+                fetchGithubStatus()
+                  .then(setGithubStatus)
+                  .catch(() => setGithubStatus(null));
+              }}
             />
           )}
         </section>
@@ -1375,7 +1519,7 @@ function CodeReviewView({
             <div className="inline-note stale-review-note">{staleMessage}</div>
           )}
 
-          {!codeReview && !loadingReview && !reviewStaleReason && (
+          {!codeReview && !loadingReview && (
             <div className="empty-state">
               <Bot size={32} />
               <strong>Ready</strong>
@@ -1391,7 +1535,7 @@ function CodeReviewView({
           )}
 
           {codeReview && !loadingReview && (
-          <div className="review-output">
+          <div className={cx("review-output", reviewStaleReason ? "review-stale" : undefined)}>
             <div className="score-band">
               <div className={cx("score-orb", scoreTone(codeReview.score))}>{codeReview.score}</div>
               <div>
@@ -1469,23 +1613,33 @@ function CodeReviewView({
 
 function PrReviewView({
   prUrl,
+  prMeta,
   prFiles,
+  selectedFile,
   prResult,
   loadingPr,
+  githubStatus,
   onPrUrlChange,
+  onSelectFile,
   onFetchDiff,
   onReviewPr
 }: {
   prUrl: string;
+  prMeta: PrMeta | null;
   prFiles: PrFile[];
+  selectedFile: string | null;
   prResult: PrResult | null;
   loadingPr: "idle" | "diff" | "review";
+  githubStatus: GithubStatus | null;
   onPrUrlChange: (url: string) => void;
+  onSelectFile: (path: string) => void;
   onFetchDiff: () => void;
   onReviewPr: () => void;
 }) {
-  const additions = prFiles.reduce((total, file) => total + file.additions, 0);
-  const deletions = prFiles.reduce((total, file) => total + file.deletions, 0);
+  const [expandedIssues, setExpandedIssues] = useState<Record<string, boolean>>({});
+  const additions = prMeta?.additions ?? prFiles.reduce((total, file) => total + file.additions, 0);
+  const deletions = prMeta?.deletions ?? prFiles.reduce((total, file) => total + file.deletions, 0);
+  const activeFile = prFiles.find((file) => file.path === selectedFile);
 
   return (
     <div className="pr-layout">
@@ -1498,31 +1652,70 @@ function PrReviewView({
           <GitPullRequest size={20} />
         </div>
 
+        <div className="github-status-row">
+          <span className={cx("github-pill", githubStatus?.authenticated && "connected")}>
+            <CircleDot size={12} />
+            {githubStatus?.authenticated
+              ? `GitHub: @${githubStatus.username}`
+              : githubStatus?.configured
+                ? "GitHub token invalid"
+                : "GitHub: public repos only"}
+          </span>
+          <small>{githubStatus?.rate_limit_hint ?? "Connect in Settings for private repos"}</small>
+        </div>
+
         <div className="url-row">
-          <input value={prUrl} onChange={(event) => onPrUrlChange(event.target.value)} aria-label="GitHub PR URL" />
+          <input
+            value={prUrl}
+            onChange={(event) => onPrUrlChange(event.target.value)}
+            placeholder="https://github.com/owner/repo/pull/123"
+            aria-label="GitHub PR URL"
+          />
           <button className="secondary-button" onClick={onFetchDiff} disabled={loadingPr !== "idle"}>
             {loadingPr === "diff" ? <Loader2 className="spin" size={17} /> : <FileDiff size={17} />}
-            Fetch diff
+            Fetch PR
           </button>
           <button className="primary-button" onClick={onReviewPr} disabled={loadingPr !== "idle"}>
             {loadingPr === "review" ? <Loader2 className="spin" size={17} /> : <Play size={17} />}
             Review PR
           </button>
         </div>
+
+        {prMeta && (
+          <article className="pr-meta-card">
+            <div className="pr-meta-top">
+              <strong>{prMeta.title}</strong>
+              <span className={cx("pr-state", prMeta.state)}>{prMeta.state}</span>
+            </div>
+            <p className="pr-meta-repo">
+              {prMeta.repo} #{prMeta.number} · by {prMeta.author}
+            </p>
+            <div className="pr-meta-branches">
+              <GitBranch size={14} />
+              <span>
+                {prMeta.head_branch} → {prMeta.base_branch}
+              </span>
+            </div>
+            {prMeta.description && <p className="pr-meta-body">{prMeta.description.slice(0, 280)}</p>}
+            <a className="pr-github-link" href={prMeta.html_url} target="_blank" rel="noreferrer">
+              Open on GitHub ↗
+            </a>
+          </article>
+        )}
       </section>
 
       <section className="diff-summary">
         <article className="diff-stat">
           <span>Files</span>
-          <strong>{prFiles.length}</strong>
+          <strong>{prMeta?.changed_files ?? prFiles.length}</strong>
         </article>
         <article className="diff-stat good">
           <span>Additions</span>
-          <strong>{prFiles.length ? `+${additions}` : "—"}</strong>
+          <strong>{prFiles.length || prMeta ? `+${additions}` : "—"}</strong>
         </article>
         <article className="diff-stat bad">
           <span>Deletions</span>
-          <strong>{prFiles.length ? `-${deletions}` : "—"}</strong>
+          <strong>{prFiles.length || prMeta ? `-${deletions}` : "—"}</strong>
         </article>
       </section>
 
@@ -1536,57 +1729,133 @@ function PrReviewView({
         </div>
         <div className="diff-list">
           {!prFiles.length && (
-            <div className="inline-note">Fetch a diff to see changed files, or run Review PR to load demo data.</div>
+            <div className="inline-note">
+              Paste a GitHub PR URL and click Fetch PR to load the real diff from GitHub.
+            </div>
           )}
           {prFiles.map((file) => (
-            <div key={file.path} className="diff-row">
+            <button
+              key={file.path}
+              type="button"
+              className={cx("diff-row", selectedFile === file.path && "selected")}
+              onClick={() => onSelectFile(file.path)}
+            >
               <span className="file-status">{file.status[0].toUpperCase()}</span>
               <strong>{file.path}</strong>
               <span className="diff-counts">
                 <span>+{file.additions}</span>
                 <span>-{file.deletions}</span>
               </span>
-            </div>
+              {!file.patch && <span className="no-patch">no diff</span>}
+            </button>
           ))}
         </div>
+        {activeFile?.patch && (
+          <pre className="patch-preview" aria-label="Patch preview">
+            {activeFile.patch.slice(0, 4000)}
+            {activeFile.patch.length > 4000 ? "\n… (truncated)" : ""}
+          </pre>
+        )}
       </section>
 
-      <section className="panel verdict-panel">
+      <section className="panel verdict-panel review-pane">
         <div className="panel-heading compact">
           <div>
             <span className="eyebrow">Verdict</span>
-            <h2>Claude review</h2>
+            <h2>PR review</h2>
           </div>
           <PanelRightOpen size={18} />
         </div>
 
-        {!prResult && (
-          <div className="empty-state">
-            <GitPullRequest size={32} />
-            <strong>Pending</strong>
-            <span>Approval state and concerns appear after review.</span>
-          </div>
-        )}
+        <div className="review-pane-body">
+          {!prResult && loadingPr !== "review" && (
+            <div className="empty-state">
+              <GitPullRequest size={32} />
+              <strong>Pending</strong>
+              <span>Run Review PR to see verdict, issues, and fix suggestions.</span>
+            </div>
+          )}
 
-        {prResult && (
-          <div className="review-output">
-            <div className={cx("verdict-banner", prResult.verdict === "Approve" ? "approve" : "changes")}>
-              {prResult.verdict === "Approve" ? <BadgeCheck size={24} /> : <AlertTriangle size={24} />}
-              <div>
-                <strong>{prResult.verdict}</strong>
-                <span>{prResult.confidence}% confidence / score {prResult.score}</span>
+          {loadingPr === "review" && (
+            <div className="review-loading">
+              <Loader2 className="spin" size={26} />
+              <span>Reviewing pull request…</span>
+            </div>
+          )}
+
+          {prResult && loadingPr !== "review" && (
+            <div className="review-output">
+              <div className={cx("verdict-banner", prResult.verdict === "Approve" ? "approve" : "changes")}>
+                {prResult.verdict === "Approve" ? <BadgeCheck size={24} /> : <AlertTriangle size={24} />}
+                <div>
+                  <strong>{prResult.verdict}</strong>
+                  <span>{prResult.confidence}% confidence / score {prResult.score}</span>
+                </div>
+              </div>
+
+              <div className="score-band">
+                <div className={cx("score-orb", scoreTone(prResult.score))}>{prResult.score}</div>
+                <div>
+                  <strong>{prResult.summary}</strong>
+                  <span>{prResult.model}</span>
+                </div>
+              </div>
+
+              <section className="issue-stack">
+                <div className="mini-heading">
+                  <AlertCircle size={16} />
+                  Issues
+                  <span>{prResult.issues.length}</span>
+                </div>
+                {prResult.issues.length === 0 && (
+                  <div className="inline-note">No issues match the enabled review types and severity threshold.</div>
+                )}
+                {prResult.issues.map((issue) => (
+                  <article key={issue.id} className="issue-card">
+                    <div className="issue-summary">
+                      <button
+                        type="button"
+                        className="issue-toggle"
+                        onClick={() =>
+                          setExpandedIssues((current) => ({ ...current, [issue.id]: !current[issue.id] }))
+                        }
+                      >
+                        <span className={cx("severity-badge", issue.severity)}>{severityLabels[issue.severity]}</span>
+                        <span>
+                          <strong>{reviewTypeLabels[issue.type]}</strong>
+                          <small>Line {issue.line}</small>
+                        </span>
+                        <ChevronDown className={expandedIssues[issue.id] ? "rotate" : ""} size={16} />
+                      </button>
+                    </div>
+                    {expandedIssues[issue.id] && (
+                      <div className="issue-detail">
+                        <p>{issue.description}</p>
+                        <div>
+                          <Sparkles size={15} />
+                          <span>{issue.suggestion}</span>
+                        </div>
+                      </div>
+                    )}
+                  </article>
+                ))}
+              </section>
+
+              <div className="concern-list">
+                <div className="mini-heading">
+                  <AlertTriangle size={16} />
+                  Top concerns
+                </div>
+                {prResult.concerns.map((concern) => (
+                  <div key={concern} className="concern-row">
+                    <AlertCircle size={15} />
+                    <span>{concern}</span>
+                  </div>
+                ))}
               </div>
             </div>
-            <div className="concern-list">
-              {prResult.concerns.map((concern) => (
-                <div key={concern} className="concern-row">
-                  <AlertCircle size={15} />
-                  <span>{concern}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+          )}
+        </div>
       </section>
     </div>
   );
@@ -1659,7 +1928,14 @@ function HistoryView({
                 <span className={cx("severity-badge", severity ?? "low")}>
                   {severity ? severityLabels[severity] : "Clean"}
                 </span>
-                <span className={cx("verdict-chip", record.verdict === "Approve" ? "approve" : "changes")}>
+                <span
+                  className={cx(
+                    "verdict-chip",
+                    record.kind === "PR" && record.verdict === "Approve" && "approve",
+                    record.kind === "PR" && record.verdict === "Request Changes" && "changes",
+                    record.kind === "PR" && !record.verdict && "neutral"
+                  )}
+                >
                   {record.kind === "PR" ? record.verdict ?? "—" : "—"}
                 </span>
                 <span className="language-tag">{record.language}</span>
@@ -1677,17 +1953,62 @@ function SettingsView({
   settings,
   stats,
   apiOnline,
+  githubStatus,
   onSettingsChange,
-  onToggleReviewType
+  onToggleReviewType,
+  onGithubTokenChange
 }: {
   settings: AppSettings;
   stats: { reviews: number; average: number; critical: number; approvalRate: number };
   apiOnline: boolean;
+  githubStatus: GithubStatus | null;
   onSettingsChange: (settings: AppSettings) => void;
   onToggleReviewType: (type: ReviewType) => void;
+  onGithubTokenChange: (token: string) => void;
 }) {
+  const [tokenInput, setTokenInput] = useState(getGithubToken);
+
   return (
     <div className="settings-grid">
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            <span className="eyebrow">Integrations</span>
+            <h2>GitHub</h2>
+          </div>
+          <GitPullRequest size={20} />
+        </div>
+        <p className="settings-hint">
+          Personal access token with <code>repo</code> scope for private PRs. Stored in your browser only.
+          Or set <code>GITHUB_TOKEN</code> in backend/.env for all users.
+        </p>
+        <div className="token-row">
+          <input
+            type="password"
+            value={tokenInput}
+            onChange={(event) => setTokenInput(event.target.value)}
+            placeholder="ghp_..."
+            aria-label="GitHub token"
+          />
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => {
+              onGithubTokenChange(tokenInput);
+            }}
+          >
+            Save token
+          </button>
+        </div>
+        {githubStatus && (
+          <p className="settings-hint">
+            {githubStatus.authenticated
+              ? `Connected as @${githubStatus.username} · ${githubStatus.rate_limit_hint}`
+              : githubStatus.rate_limit_hint}
+          </p>
+        )}
+      </section>
+
       <section className="panel">
         <div className="panel-heading">
           <div>

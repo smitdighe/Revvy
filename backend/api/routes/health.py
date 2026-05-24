@@ -1,14 +1,14 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from fastapi import APIRouter
 from config import settings
 
-MODULE_START_TIME = datetime.utcnow()
+MODULE_START_TIME = datetime.now(UTC)
 
 router = APIRouter(prefix="/health", tags=["health"])
 
 @router.get("/")
 def health_check() -> dict:
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     return {
         "status": "ok",
         "app": settings.APP_NAME,

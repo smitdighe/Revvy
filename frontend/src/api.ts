@@ -27,8 +27,56 @@ type PrFile = {
   path: string;
   additions: number;
   deletions: number;
-  status: "modified" | "added" | "renamed";
+  status: "modified" | "added" | "renamed" | "removed";
+  patch?: string | null;
+  previous_filename?: string | null;
 };
+
+type PrMeta = {
+  repo: string;
+  number: number;
+  title: string;
+  author: string;
+  html_url: string;
+  state: string;
+  base_branch: string;
+  head_branch: string;
+  description: string;
+  additions: number;
+  deletions: number;
+  changed_files: number;
+};
+
+type GithubStatus = {
+  configured: boolean;
+  authenticated: boolean;
+  username: string | null;
+  rate_limit_hint: string;
+  env_token?: boolean;
+};
+
+const GITHUB_TOKEN_KEY = "revvy-github-token";
+
+export function getGithubToken(): string {
+  return localStorage.getItem(GITHUB_TOKEN_KEY) || "";
+}
+
+export function setGithubToken(token: string) {
+  if (token.trim()) {
+    localStorage.setItem(GITHUB_TOKEN_KEY, token.trim());
+  } else {
+    localStorage.removeItem(GITHUB_TOKEN_KEY);
+  }
+}
+
+function githubHeaders(): HeadersInit {
+  const token = getGithubToken();
+  return token ? { "X-GitHub-Token": token } : {};
+}
+
+function apiHeaders(extra?: HeadersInit): HeadersInit {
+  return { "Content-Type": "application/json", ...githubHeaders(), ...extra };
+}
 
 type PrResult = ReviewResult & {
   verdict: "Approve" | "Request Changes";
@@ -52,7 +100,7 @@ const severityOrder: Record<Severity, number> = {
   low: 1
 };
 
-export type { ReviewResult, PrResult, PrFile };
+export type { ReviewResult, PrResult, PrFile, PrMeta, GithubStatus };
 
 export const demoPrFiles: PrFile[] = [
   { path: "src/services/reviewProxy.ts", additions: 82, deletions: 18, status: "modified" },
@@ -97,7 +145,38 @@ function filterByReviewTypes(issues: ReviewIssue[], reviewTypes: AppSettings["re
   return issues.filter((issue) => reviewTypes[issue.type]);
 }
 
+export function mergeReviewResults(local: ReviewResult, remote: ReviewResult): ReviewResult {
+  const seen = new Set<string>();
+  const issues: ReviewIssue[] = [];
+
+  for (const issue of [...local.issues, ...remote.issues]) {
+    const key = `${issue.line}:${issue.type}:${issue.description.slice(0, 48)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    issues.push(issue);
+  }
+
+  const score = issues.length > 0 ? recalculateScore(issues) : Math.min(local.score, remote.score);
+  const summary =
+    issues.length === 0
+      ? remote.summary || local.summary
+      : remote.issues.length > 0 && local.issues.length > 0
+        ? `${remote.summary} (${issues.length} total findings including static checks.)`
+        : local.issues.length > 0
+          ? `Static analysis flagged ${local.issues.length} issue(s). ${remote.summary}`
+          : remote.summary;
+
+  return {
+    ...remote,
+    issues,
+    score,
+    summary,
+    strengths: issues.length > 0 ? (remote.strengths.length ? remote.strengths : local.strengths) : remote.strengths
+  };
+}
+
 export function applyReviewFilters(review: ReviewResult, settings: AppSettings): ReviewResult {
+  const totalBefore = review.issues.length;
   let issues = filterByReviewTypes(review.issues, settings.reviewTypes);
   issues = filterByThreshold(issues, settings.threshold);
   const score = issues.length ? recalculateScore(issues) : Math.max(38, review.score);
@@ -111,9 +190,11 @@ export function applyReviewFilters(review: ReviewResult, settings: AppSettings):
     ...metrics,
     issues,
     summary:
-      issues.length === 0
-        ? `No issues found for ${enabledTypes.join(", ") || "selected checks"} at the ${settings.threshold} threshold.`
-        : review.summary,
+      issues.length === 0 && totalBefore > 0
+        ? `${totalBefore} issue(s) were found but hidden by your review-type or severity filters. Lower the threshold or enable more check types.`
+        : issues.length === 0
+          ? review.summary
+          : review.summary,
     strengths: issues.length > 0 ? review.strengths : []
   };
 }
@@ -150,6 +231,17 @@ export function isOfflineError(error: unknown): boolean {
   if (error instanceof TypeError) return true;
   if (error instanceof Error) {
     return /failed to fetch|networkerror|network request failed|load failed/i.test(error.message);
+  }
+  return false;
+}
+
+/** Use local analysis when the API is up but review engine is unavailable. */
+export function isRecoverableReviewError(error: unknown): boolean {
+  if (isOfflineError(error)) return true;
+  if (error instanceof Error) {
+    return /GEMINI|not set|service unavailable|50[0-9]|failed to fetch|network|aborted|timeout/i.test(
+      error.message
+    );
   }
   return false;
 }
@@ -291,7 +383,7 @@ export async function reviewCodeFile(
 ): Promise<ReviewResult> {
   const response = await fetch("/api/v1/review/code", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: apiHeaders(),
     body: JSON.stringify({
       code,
       language: languageForApi(language, filename),
@@ -308,10 +400,41 @@ export async function reviewCodeFile(
   return mapBackendReview(data, settings.model);
 }
 
-export async function fetchPrFiles(prUrl: string): Promise<PrFile[]> {
-  const response = await fetch("/api/v1/review/pr/files", {
+function mapPrFile(file: {
+  path: string;
+  additions: number;
+  deletions: number;
+  status: string;
+  patch?: string | null;
+  previous_filename?: string | null;
+}): PrFile {
+  const status = file.status;
+  const mappedStatus: PrFile["status"] =
+    status === "added" || status === "renamed" || status === "removed"
+      ? status
+      : "modified";
+  return {
+    path: file.path,
+    additions: file.additions,
+    deletions: file.deletions,
+    status: mappedStatus,
+    patch: file.patch ?? null,
+    previous_filename: file.previous_filename ?? null
+  };
+}
+
+export async function fetchGithubStatus(): Promise<GithubStatus> {
+  const response = await fetch("/api/v1/github/status", { headers: githubHeaders() });
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return (await response.json()) as GithubStatus;
+}
+
+export async function fetchPrDetails(prUrl: string): Promise<{ pr: PrMeta; files: PrFile[]; github: GithubStatus }> {
+  const response = await fetch("/api/v1/review/pr/details", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: apiHeaders(),
     body: JSON.stringify({ pr_url: prUrl })
   });
 
@@ -320,20 +443,29 @@ export async function fetchPrFiles(prUrl: string): Promise<PrFile[]> {
   }
 
   const data = (await response.json()) as {
+    pr: PrMeta;
     files: Array<{
       path: string;
       additions: number;
       deletions: number;
       status: string;
+      patch?: string | null;
+      previous_filename?: string | null;
     }>;
+    github: GithubStatus;
   };
 
-  return data.files.map((file) => ({
-    path: file.path,
-    additions: file.additions,
-    deletions: file.deletions,
-    status: (file.status === "added" || file.status === "renamed" ? file.status : "modified") as PrFile["status"]
-  }));
+  return {
+    pr: data.pr,
+    files: data.files.map(mapPrFile),
+    github: data.github
+  };
+}
+
+/** @deprecated Use fetchPrDetails */
+export async function fetchPrFiles(prUrl: string): Promise<PrFile[]> {
+  const { files } = await fetchPrDetails(prUrl);
+  return files;
 }
 
 export async function reviewPullRequest(
@@ -343,7 +475,7 @@ export async function reviewPullRequest(
 ): Promise<PrResult> {
   const response = await fetch("/api/v1/review/pr", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: apiHeaders(),
     body: JSON.stringify({
       pr_url: prUrl,
       focus_areas: focusAreasFromSettings(settings)

@@ -7,7 +7,7 @@ _rate_limit_store: dict[str, list[float]] = {}
 _MAX_IPS = 10000
 
 def rate_limit(request: Request) -> None:
-    ip = request.client.host
+    ip = request.client.host if request.client else "unknown"
     now = time.time()
     window = 60.0
     timestamps = _rate_limit_store.get(ip, [])
@@ -37,3 +37,10 @@ def verify_api_key(x_api_key: str = Header(default=None)) -> None:
         return
     if x_api_key is None or x_api_key != settings.API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API key")
+
+
+def get_github_token(x_github_token: str | None = Header(default=None)) -> str:
+    """Prefer user-supplied token (Settings UI), then server .env."""
+    if x_github_token and x_github_token.strip():
+        return x_github_token.strip()
+    return (settings.GITHUB_TOKEN or "").strip()

@@ -43,8 +43,7 @@ async def stream_code_review(
                 "event": "error",
                 "data": json.dumps({"message": str(exc)}),
             }
-
-        yield {"event": "done", "data": "{}"}
+            yield {"event": "done", "data": "{}"}
 
     return EventSourceResponse(
         event_generator(),
