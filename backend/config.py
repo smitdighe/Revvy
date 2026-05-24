@@ -1,4 +1,6 @@
 from pydantic_settings import BaseSettings
+from pydantic import field_validator
+import json
 
 class Settings(BaseSettings):
 
@@ -13,9 +15,14 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: list[str] = [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
-        "http://localhost:8000",
-        "http://127.0.0.1:8000",
     ]
+
+    @field_validator("ALLOWED_ORIGINS", mode="before")
+    @classmethod
+    def parse_origins(cls, v):
+        if isinstance(v, str):
+            return json.loads(v)
+        return v
 
     model_config = {"env_file": ".env"}
 
