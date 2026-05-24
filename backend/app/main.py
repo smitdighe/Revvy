@@ -22,8 +22,8 @@ logger = logging.getLogger("revvy")
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Revvy %s starting, debug=%s", settings.VERSION, settings.DEBUG)
-    if not settings.GEMINI_API_KEY:
-        logger.warning("GEMINI_API_KEY missing — using static analysis for code review")
+    if not settings.GROQ_API_KEY:
+        logger.warning("GROQ_API_KEY missing — using static analysis for code review")
     if not settings.GITHUB_TOKEN:
         logger.warning("GITHUB_TOKEN missing — public repos only, lower rate limits")
     yield

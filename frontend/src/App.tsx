@@ -802,7 +802,7 @@ export function App() {
           notice ??
           (isOfflineError(error)
             ? "Using local analysis — start the Revvy API for live reviews."
-            : "Using local analysis — add GEMINI_API_KEY to backend/.env for AI reviews.");
+            : "Using local analysis — start the Revvy API for live reviews.");
       } else {
         setStatusNotice(error instanceof Error ? error.message : "Review failed");
         setLoadingReview(false);
@@ -933,7 +933,7 @@ export function App() {
         notice =
           isOfflineError(error)
             ? "Using local PR analysis — connect the Revvy API for live reviews."
-            : "Using local PR analysis — add GEMINI_API_KEY for AI-powered PR reviews.";
+            : "Using local analysis — start the Revvy API for live reviews.";
       } else {
         setStatusNotice(error instanceof Error ? error.message : "PR review failed");
         setLoadingPr("idle");

@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
 
-    GEMINI_API_KEY: str = ""
+    GROQ_API_KEY: str = ""
     GITHUB_TOKEN: str = ""
     APP_NAME: str = "Revvy"
     VERSION: str = "1.0.0"

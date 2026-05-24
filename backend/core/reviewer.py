@@ -3,7 +3,7 @@ import json
 import re
 from collections.abc import AsyncGenerator
 
-from google import genai
+from groq import Groq
 from fastapi import HTTPException
 
 from config import settings
@@ -17,19 +17,19 @@ from core.static_analysis import (
 from schemas.request import CodeReviewRequest
 from schemas.response import ReviewIssue, ReviewResult, StreamChunk
 
-_client: genai.Client | None = None
-MODEL = "gemini-2.0-flash"
+_client: Groq | None = None
+MODEL = "llama-3.3-70b-versatile"
 
 
-def _get_client() -> genai.Client:
+def _get_client() -> Groq:
     global _client
-    if not settings.GEMINI_API_KEY:
+    if not settings.GROQ_API_KEY:
         raise HTTPException(
             status_code=503,
-            detail="GEMINI_API_KEY is not set. Add it to backend/.env",
+            detail="GROQ_API_KEY is not set. Add it to backend/.env",
         )
     if _client is None:
-        _client = genai.Client(api_key=settings.GEMINI_API_KEY)
+        _client = Groq(api_key=settings.GROQ_API_KEY)
     return _client
 
 SYSTEM_PROMPT = (
@@ -67,8 +67,11 @@ SYSTEM_PROMPT = (
     "}"
 )
 
-def _build_prompt(request: CodeReviewRequest) -> str:
-    parts: list[str] = [SYSTEM_PROMPT, ""]
+def build_system_prompt() -> str:
+    return SYSTEM_PROMPT
+
+def build_user_message(request: CodeReviewRequest) -> str:
+    parts: list[str] = []
     parts.append(f"Language: {request.language}")
     if request.filename:
         parts.append(f"Filename: {request.filename}")
@@ -99,33 +102,38 @@ def _merge_issues(static: list[ReviewIssue], ai: list[ReviewIssue]) -> list[Revi
 async def review_code(request: CodeReviewRequest, review_id: str) -> ReviewResult:
     static_issues = static_analyze(request.code, request.focus_areas)
 
-    if not settings.GEMINI_API_KEY:
+    if not settings.GROQ_API_KEY:
         return mock_review_code(request, review_id)
 
-    prompt = _build_prompt(request)
     client = _get_client()
 
     loop = asyncio.get_running_loop()
     try:
         response = await loop.run_in_executor(
             None,
-            lambda: client.models.generate_content(model=MODEL, contents=prompt),
+            lambda: client.chat.completions.create(
+                model=MODEL,
+                messages=[
+                    {"role": "system", "content": build_system_prompt()},
+                    {"role": "user", "content": build_user_message(request)},
+                ],
+            ),
         )
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    if not response.text:
-        raise HTTPException(status_code=502, detail="Empty response from Gemini")
+    if not response.choices or not response.choices[0].message.content:
+        raise HTTPException(status_code=502, detail="Empty response from Groq")
 
-    raw_text = _strip_markdown_fences(response.text)
+    raw_text = _strip_markdown_fences(response.choices[0].message.content)
 
     try:
         data = json.loads(raw_text)
     except json.JSONDecodeError as exc:
         raise HTTPException(
-            status_code=502, detail=f"Failed to parse Gemini response: {exc}"
+            status_code=502, detail=f"Failed to parse Groq response: {exc}"
         ) from exc
 
     ai_issues = [ReviewIssue(**issue) for issue in data.get("issues", [])]
@@ -157,12 +165,18 @@ async def stream_review(
     )
 
     try:
-        prompt = _build_prompt(request)
         client = _get_client()
         loop = asyncio.get_running_loop()
         response = await loop.run_in_executor(
             None,
-            lambda: client.models.generate_content_stream(model=MODEL, contents=prompt),
+            lambda: client.chat.completions.create(
+                model=MODEL,
+                messages=[
+                    {"role": "system", "content": build_system_prompt()},
+                    {"role": "user", "content": build_user_message(request)},
+                ],
+                stream=True,
+            ),
         )
 
         json_buffer = ""
@@ -173,7 +187,7 @@ async def stream_review(
         escape_next = False
 
         for chunk in response:
-            text = chunk.text or ""
+            text = chunk.choices[0].delta.content or ""
             for ch in text:
                 json_buffer += ch
 
