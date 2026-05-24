@@ -9,7 +9,6 @@ from schemas.request import CodeReviewRequest, PRReviewRequest
 from schemas.response import ReviewResult
 from utils.markdown import review_to_markdown
 from utils.timer import add_timing_header, timed_review
-from schemas.response import PRFilesResult
 
 REVIEW_STORE: OrderedDict[str, ReviewResult] = OrderedDict()
 MAX_STORE_SIZE = 100
