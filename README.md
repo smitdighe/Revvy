@@ -2,6 +2,9 @@
 
 **Your AI pair programmer for every PR.**
 
+> 🌐 **Live Demo:** https://revvy-iota.vercel.app  
+> 🔧 **API Docs:** https://revvy-backend.onrender.com/docs
+
 Revvy is an AI-powered code review platform that analyzes raw code snippets and GitHub Pull Requests to detect bugs, security risks, performance issues, code smells, and style problems — all with structured AI-generated feedback.
 
 ---
@@ -43,7 +46,7 @@ Revvy is an AI-powered code review platform that analyzes raw code snippets and 
 
 ### 🤖 AI & APIs
 <p>
-  <img src="https://img.shields.io/badge/Google_Gemini_API-4285F4?style=for-the-badge&logo=google&logoColor=white" />
+  <img src="https://img.shields.io/badge/Groq-F55036?style=for-the-badge&logo=groq&logoColor=white" />
   <img src="https://img.shields.io/badge/REST_API-FF6C37?style=for-the-badge&logo=postman&logoColor=white" />
 </p>
 
@@ -126,7 +129,7 @@ pip install -r requirements.txt
 Create `.env`
 
 ```env
-GEMINI_API_KEY=your_key_here
+GROQ_API_KEY=your_key_here
 GITHUB_TOKEN=your_github_token
 ```
 
@@ -171,23 +174,25 @@ GET /api/v1/health
 ### Review Code
 
 ```http
-POST /api/v1/review
+POST /api/v1/review/code
+```
+
+### PR Review
+
+```http
+POST /api/v1/review/pr
+```
+
+### Export Review
+
+```http
+GET /api/v1/review/{review_id}/export
 ```
 
 ### Stream Review
 
 ```http
-POST /api/v1/stream
-```
-
----
-
-## 📸 Screenshots
-
-Add screenshots from:
-
-```bash
-frontend/screenshots/
+POST /api/v1/stream/code
 ```
 
 ---
