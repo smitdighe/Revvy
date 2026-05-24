@@ -24,23 +24,46 @@ Revvy is an AI-powered code review platform that analyzes raw code snippets and 
 
 ---
 
-## 🛠 Tech Stack
+## 🛠️ Tech Stack
 
-### Frontend
-- React
-- TypeScript
-- Vite
-- Framer Motion
-- Lucide React
+### 💻 Programming Languages
+<p>
+  <img src="https://skillicons.dev/icons?i=python,typescript,javascript" />
+</p>
 
-### Backend
-- FastAPI
-- Google Gemini API
-- PyGithub
-- SSE (Server-Sent Events)
-- Pydantic
-- Uvicorn
+### 🌐 Frontend Development
+<p>
+  <img src="https://skillicons.dev/icons?i=react,vite,html,css" />
+</p>
 
+### ⚙️ Backend Development
+<p>
+  <img src="https://skillicons.dev/icons?i=fastapi" />
+</p>
+
+### 🤖 AI & APIs
+<p>
+  <img src="https://img.shields.io/badge/Google_Gemini_API-4285F4?style=for-the-badge&logo=google&logoColor=white" />
+  <img src="https://img.shields.io/badge/REST_API-FF6C37?style=for-the-badge&logo=postman&logoColor=white" />
+</p>
+
+### 🗄️ Databases / Data Handling
+<p>
+  <img src="https://skillicons.dev/icons?i=sqlite" />
+</p>
+
+### 📡 Real-Time / Networking
+<p>
+  <img src="https://img.shields.io/badge/SSE-Server--Sent_Events-blue?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/PyGithub-181717?style=for-the-badge&logo=github&logoColor=white" />
+  <img src="https://img.shields.io/badge/Uvicorn-499848?style=for-the-badge" />
+</p>
+
+### 🎨 UI / Animation
+<p>
+  <img src="https://img.shields.io/badge/Framer_Motion-black?style=for-the-badge&logo=framer&logoColor=blue" />
+  <img src="https://img.shields.io/badge/Lucide_React-F56565?style=for-the-badge" />
+</p>
 ---
 
 ## 📂 Project Structure
