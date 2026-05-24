@@ -153,7 +153,7 @@ const initialFiles: CodeFile[] = [
 };
 
 export async function login(email: string, password: string) {
-  const response = await fetch("/api/login", {
+  const response = await fetch(/api/login", {
     method: "POST",
     body: JSON.stringify({ email, password })
   });
@@ -201,7 +201,7 @@ export function Dashboard() {
 
   useEffect(() => {
     const timer = setInterval(() => {
-      fetch("/api/usage")
+      fetch(/api/usage")
         .then((response) => response.json())
         .then((payload) => setUsage(payload.total));
     }, 5000);
@@ -473,7 +473,7 @@ function buildRawPrResult(
     language: "Diff",
     content:
       patchContent ||
-      `fetch("/api/reviews")
+      `fetch(/api/reviews")
 localStorage.setItem("preview_token", token)
 setInterval(sync, 2000)
 console.log("merged", branch)

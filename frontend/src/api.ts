@@ -1,3 +1,4 @@
+const BASE_URL = import.meta.env.VITE_API_URL ?? "";
 type ReviewType = "bugs" | "security" | "performance" | "style";
 type ModelChoice = "Claude Sonnet 4" | "Claude Opus 4" | "Claude Haiku 3.5";
 type Severity = "critical" | "high" | "medium" | "low";
@@ -235,7 +236,6 @@ export function isOfflineError(error: unknown): boolean {
   return false;
 }
 
-/** Use local analysis when the API is up but review engine is unavailable. */
 export function isRecoverableReviewError(error: unknown): boolean {
   if (isOfflineError(error)) return true;
   if (error instanceof Error) {
@@ -381,7 +381,7 @@ export async function reviewCodeFile(
   filename: string,
   settings: AppSettings
 ): Promise<ReviewResult> {
-  const response = await fetch("/api/v1/review/code", {
+  const response = await fetch(`${BASE_URL}/api/v1/review/code`, {
     method: "POST",
     headers: apiHeaders(),
     body: JSON.stringify({
@@ -424,7 +424,7 @@ function mapPrFile(file: {
 }
 
 export async function fetchGithubStatus(): Promise<GithubStatus> {
-  const response = await fetch("/api/v1/github/status", { headers: githubHeaders() });
+  const response = await fetch(`${BASE_URL}/api/v1/github/status`, { headers: githubHeaders() });
   if (!response.ok) {
     throw new Error(await parseError(response));
   }
@@ -432,7 +432,7 @@ export async function fetchGithubStatus(): Promise<GithubStatus> {
 }
 
 export async function fetchPrDetails(prUrl: string): Promise<{ pr: PrMeta; files: PrFile[]; github: GithubStatus }> {
-  const response = await fetch("/api/v1/review/pr/details", {
+  const response = await fetch(`${BASE_URL}/api/v1/review/pr/details`, {
     method: "POST",
     headers: apiHeaders(),
     body: JSON.stringify({ pr_url: prUrl })
@@ -473,7 +473,7 @@ export async function reviewPullRequest(
   settings: AppSettings,
   files: PrFile[]
 ): Promise<PrResult> {
-  const response = await fetch("/api/v1/review/pr", {
+  const response = await fetch(`${BASE_URL}/api/v1/review/pr`, {
     method: "POST",
     headers: apiHeaders(),
     body: JSON.stringify({
@@ -494,7 +494,7 @@ export async function checkApiHealth(): Promise<boolean> {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), 4000);
   try {
-    const response = await fetch("/api/v1/health/ping", { signal: controller.signal });
+    const response = await fetch(`${BASE_URL}/api/v1/health/ping`, { signal: controller.signal });
     return response.ok;
   } catch {
     return false;
