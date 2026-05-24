@@ -9,6 +9,14 @@ Revvy is an AI-powered code review platform that analyzes raw code snippets and 
 
 ---
 
+## 🎬 Demo Video
+
+[![Revvy Demo](https://img.youtube.com/vi/eJBOME2-i-A/maxresdefault.jpg)](https://youtu.be/eJBOME2-i-A?si=NVzyXnGZyv-5RAiS)
+
+> Click the thumbnail to watch the full demo on YouTube.
+
+---
+
 ## ✨ Features
 
 - 🔍 **AI Code Review** for code snippets
