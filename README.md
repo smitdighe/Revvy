@@ -54,42 +54,46 @@ Revvy is an AI-powered code review platform that analyzes raw code snippets and 
   <img src="https://img.shields.io/badge/Uvicorn-499848?style=for-the-badge" />
 </p>
 
-### 🎨 UI / Animation
+### 🎨 UI Libraries
 <p>
   <img src="https://img.shields.io/badge/Lucide_React-F56565?style=for-the-badge" />
 </p>
+
 ---
 
 ## 📂 Project Structure
 
 ```bash
 Revvy/
-├── frontend/                    # React + TypeScript client
+├── frontend/
 │   ├── src/
-│   │   ├── components/          # Reusable UI components
-│   │   ├── services/            # API calls (backend integration)
-│   │   ├── utils/               # Helper functions
-│   │   ├── types/               # TypeScript interfaces/types
-│   │   ├── App.tsx              # Main application
-│   │   ├── main.tsx             # React entry point
-│   │   └── index.css            # Global styles
-│   ├── public/                  # Static assets
+│   │   ├── components/
+│   │   ├── services/
+│   │   ├── utils/
+│   │   ├── types/
+│   │   ├── App.tsx
+│   │   ├── main.tsx
+│   │   └── index.css
+│   ├── public/
 │   ├── package.json
 │   ├── tsconfig.json
 │   └── vite.config.ts
 │
-├── backend/                     # FastAPI backend
+├── backend/
 │   ├── app/
-│   │   └── main.py              # FastAPI entry point
+│   │   └── main.py
 │   ├── api/
-│   │   ├── routes/              # API endpoints
-│   │   └── dependencies/        # Shared dependencies
+│   │   ├── routes/
+│   │   │   ├── health.py
+│   │   │   ├── review.py
+│   │   │   └── stream.py
+│   │   └── dependencies.py
 │   ├── core/
-│   │   ├── reviewer.py          # AI review logic
-│   │   ├── pr_parser.py         # GitHub PR parsing
-│   │   └── scoring.py           # Quality scoring logic
-│   ├── schemas/                # Request/response models
-│   ├── utils/                  # Helper utilities
+│   │   ├── github.py
+│   │   ├── parser.py
+│   │   └── reviewer.py
+│   ├── schemas/
+│   ├── utils/
 │   ├── requirements.txt
 │   └── Dockerfile
 │
