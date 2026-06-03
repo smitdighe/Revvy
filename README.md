@@ -226,14 +226,3 @@ Paste GitHub PR URL and get:
 - Verdict generation
 - Review summary
 
----
-
-## Future Improvements
-
-- GitHub App integration
-- Inline code comments on PRs
-- Multi-model support
-- Team review dashboard
-- CI/CD integration
-
----
